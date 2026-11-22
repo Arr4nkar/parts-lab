@@ -1,0 +1,83 @@
+name: Учебные данные
+on:
+  workflow_dispatch:
+    inputs:
+      create:
+        description: Создать недостающие карточки
+        type: boolean
+        default: false
+permissions:
+  contents: read
+  issues: write
+concurrency: parts-lab-seed
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Проверить таблицу и карточки
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CREATE_ITEMS: ${{ inputs.create }}
+        shell: python
+        run: |
+          import base64
+          import csv
+          import io
+          import json
+          import os
+          import subprocess
+
+          repo = os.environ['GITHUB_REPOSITORY']
+          root = f'repos/{repo}'
+          def api(path, *args):
+              result = subprocess.check_output(['gh', 'api', f'{root}/{path}', *args], text=True)
+              return json.loads(result) if result.strip() else None
+
+          contents = api('contents/data/tasks.csv?ref=' + os.environ['GITHUB_SHA'])
+          source = base64.b64decode(contents['content']).decode('utf-8-sig')
+          rows = list(csv.DictReader(io.StringIO(source)))
+          keys = {row['id'] for row in rows}
+          if len(keys) != len(rows) or len({r['title'] for r in rows}) != len(rows):
+              raise ValueError('В таблице повторяются идентификаторы или названия')
+          for row in rows:
+              for field in ('parent', 'blocked_by'):
+                  if row[field] and row[field] not in keys:
+                      raise ValueError(f'Неизвестная связь {row[field]}')
+          pages = api('issues?state=all&per_page=100', '--paginate', '--slurp')
+          existing = {}
+          for page in pages:
+              for issue in page:
+                  if 'pull_request' not in issue:
+                      existing.setdefault(issue['title'], []).append(issue)
+          if any(len(existing.get(row['title'], [])) > 1 for row in rows):
+              raise ValueError('Две карточки имеют одно учебное название')
+          create = os.environ['CREATE_ITEMS'].lower() == 'true'
+          items = {}
+          missing = 0
+          for row in rows:
+              matches = existing.get(row['title'], [])
+              if matches:
+                  items[row['id']] = matches[0]
+                  print(f"Есть #{matches[0]['number']} — {row['title']}")
+              else:
+                  missing += 1
+                  print(f"К созданию — {row['title']}")
+                  if create:
+                      body = f"{row['kind']}. Команда {row['team']}. План: {row['iteration']}."
+                      if row['hours']:
+                          body += f" Оценка {row['hours']} ч."
+                      items[row['id']] = api('issues', '-f', 'title=' + row['title'], '-f', 'body=' + body)
+          if create:
+              for row in rows:
+                  child = items[row['id']]
+                  if row['parent']:
+                      parent = items[row['parent']]
+                      path = f"issues/{parent['number']}/sub_issues"
+                      if child['id'] not in {item['id'] for page in api(path + '?per_page=100', '--paginate', '--slurp') for item in page}:
+                          api(path, '-F', f"sub_issue_id={child['id']}")
+                  if row['blocked_by']:
+                      blocker = items[row['blocked_by']]
+                      path = f"issues/{child['number']}/dependencies/blocked_by"
+                      if blocker['id'] not in {item['id'] for page in api(path + '?per_page=100', '--paginate', '--slurp') for item in page}:
+                          api(path, '-F', f"issue_id={blocker['id']}")
+          print(f'Строк в таблице: {len(rows)}. Отсутствовало карточек: {missing}.')
