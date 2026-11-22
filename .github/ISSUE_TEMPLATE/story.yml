@@ -1,6 +1,5 @@
 name: История
 description: Предложить функцию для магазина
-title: ""
 body:
   - type: input
     id: ticket
