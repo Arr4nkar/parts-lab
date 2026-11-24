@@ -58,10 +58,10 @@ jobs:
               matches = existing.get(row['title'], [])
               if matches:
                   items[row['id']] = matches[0]
-                  print(f"Есть #{matches[0]['number']} — {row['title']}")
+                  print(f"Есть #{matches[0]['number']} - {row['title']}")
               else:
                   missing += 1
-                  print(f"К созданию — {row['title']}")
+                  print(f"К созданию - {row['title']}")
                   if create:
                       body = f"{row['kind']}. Команда {row['team']}. План: {row['iteration']}."
                       if row['hours']:
